@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Stream Viewer</title>
+</head>
+<body>
+    <h1>Viewer Page</h1>
+    <p>Watching Stream: {{ stream_id }}</p>
+    <div>
+        <img id="streamImage" width="640" height="480" style="background-color: black;">
+    </div>
+    <div>
+        <p id="status">Connecting to stream...</p>
+    </div>
+
+    <script>
+        // Simple test script - React implementation will replace this
+        const streamId = "{{ stream_id }}";
+        let socket;
+        let viewerId = 'viewer_' + Math.random().toString(36).substring(2, 15);
+        
+        function connectToStream() {
+            socket = new WebSocket(`ws://${window.location.host}/ws/broadcast/${streamId}/`);
+            
+            socket.onopen = () => {
+                console.log('Connected to stream');
+                document.getElementById('status').textContent = 'Connected to stream';
+                
+                // Notify broadcaster that viewer has joined
+                socket.send(JSON.stringify({
+                    type: 'viewer_joined',
+                    viewer_id: viewerId
+                }));
+            };
+            
+            socket.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                if (data.type === 'video_frame') {
+                    // Update the image with the received frame
+                    document.getElementById('streamImage').src = data.frame;
+                    document.getElementById('status').textContent = 'Streaming...';
+                }
+            };
+            
+            socket.onclose = () => {
+                console.log('Disconnected from stream');
+                document.getElementById('status').textContent = 'Disconnected from stream';
+                // Try to reconnect after a delay
+                setTimeout(connectToStream, 3000);
+            };
+            
+            socket.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                document.getElementById('status').textContent = 'Connection error';
+            };
+        }
+        
+        // Connect when page loads
+        document.addEventListener('DOMContentLoaded', connectToStream);
+    </script>
+</body>
+</html>

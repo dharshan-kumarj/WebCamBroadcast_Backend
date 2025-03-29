@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Webcam Broadcaster</title>
+</head>
+<body>
+    <h1>Broadcaster Page</h1>
+    <p>Stream ID: <span id="streamId"></span></p>
+    <div>
+        <video id="localVideo" autoplay muted width="640" height="480"></video>
+    </div>
+    <div>
+        <button id="startButton">Start Broadcasting</button>
+        <button id="stopButton" disabled>Stop Broadcasting</button>
+    </div>
+    <p>Viewers: <span id="viewerCount">0</span></p>
+
+    <script>
+        // Simple test script - React implementation will replace this
+        let socket;
+        let localStream;
+        let streamId;
+        let isBroadcasting = false;
+        let frameInterval;
+        
+        async function getStreamId() {
+            const response = await fetch('/api/get-stream-id/');
+            const data = await response.json();
+            streamId = data.stream_id;
+            document.getElementById('streamId').textContent = streamId;
+            return streamId;
+        }
+        
+        async function startBroadcasting() {
+            if (!streamId) {
+                streamId = await getStreamId();
+            }
+            
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                document.getElementById('localVideo').srcObject = localStream;
+                
+                // Connect to WebSocket
+                socket = new WebSocket(`ws://${window.location.host}/ws/broadcast/${streamId}/`);
+                
+                socket.onopen = () => {
+                    console.log('WebSocket connected');
+                    isBroadcasting = true;
+                    document.getElementById('startButton').disabled = true;
+                    document.getElementById('stopButton').disabled = false;
+                    
+                    // Start sending frames
+                    startSendingFrames();
+                };
+                
+                socket.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'viewer_update' && data.action === 'joined') {
+                        // Increment viewer count
+                        const viewerCount = parseInt(document.getElementById('viewerCount').textContent);
+                        document.getElementById('viewerCount').textContent = viewerCount + 1;
+                    }
+                };
+                
+                socket.onclose = () => {
+                    console.log('WebSocket disconnected');
+                    stopBroadcasting();
+                };
+            } catch (error) {
+                console.error('Error accessing media devices:', error);
+            }
+        }
+        
+        function startSendingFrames() {
+            const canvas = document.createElement('canvas');
+            const video = document.getElementById('localVideo');
+            const ctx = canvas.getContext('2d');
+            
+            canvas.width = 320;  // Reduced size for bandwidth
+            canvas.height = 240;
+            
+            // Send frames at a reasonable rate (10fps)
+            frameInterval = setInterval(() => {
+                if (isBroadcasting && socket && socket.readyState === WebSocket.OPEN) {
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    const frame = canvas.toDataURL('image/jpeg', 0.5);  // Reduced quality
+                    
+                    socket.send(JSON.stringify({
+                        type: 'video_frame',
+                        frame: frame,
+                        broadcaster_id: streamId
+                    }));
+                }
+            }, 100);  // 10 frames per second
+        }
+        
+        function stopBroadcasting() {
+            isBroadcasting = false;
+            
+            if (frameInterval) {
+                clearInterval(frameInterval);
+            }
+            
+            if (socket) {
+                socket.close();
+            }
+            
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+            }
+            
+            document.getElementById('localVideo').srcObject = null;
+            document.getElementById('startButton').disabled = false;
+            document.getElementById('stopButton').disabled = true;
+        }
+        
+        // Initialize
+        document.addEventListener('DOMContentLoaded', getStreamId);
+        document.getElementById('startButton').addEventListener('click', startBroadcasting);
+        document.getElementById('stopButton').addEventListener('click', stopBroadcasting);
+    </script>
+</body>
+</html>
