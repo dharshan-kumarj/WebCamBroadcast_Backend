@@ -4,13 +4,12 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-class BroadcastConsumer(AsyncWebsocketConsumer):
+class SignalingConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         self.stream_id = self.scope['url_route']['kwargs']['stream_id']
-        self.room_group_name = f'broadcast_{self.stream_id}'
+        self.room_group_name = f'webrtc_{self.stream_id}'
         
-        logger.info(f"WebSocket connection attempt for stream: {self.stream_id}")
-        print(f"WebSocket connection attempt for stream: {self.stream_id}")  # Console log
+        logger.info(f"WebRTC signaling connection attempt for stream: {self.stream_id}")
         
         try:
             # Join room group
@@ -20,16 +19,14 @@ class BroadcastConsumer(AsyncWebsocketConsumer):
             )
             
             await self.accept()
-            logger.info(f"WebSocket connection accepted for stream: {self.stream_id}")
-            print(f"WebSocket connection accepted for stream: {self.stream_id}")  # Console log
+            logger.info(f"WebRTC signaling connection accepted for stream: {self.stream_id}")
         except Exception as e:
-            logger.error(f"WebSocket connect error: {str(e)}")
-            print(f"WebSocket connect error: {str(e)}")  # Console log
+            logger.error(f"WebRTC signaling connect error: {str(e)}")
             raise
     
     async def disconnect(self, close_code):
         # Leave room group
-        print(f"WebSocket disconnected: {self.stream_id}, code: {close_code}")  # Console log
+        logger.info(f"WebRTC signaling disconnected: {self.stream_id}, code: {close_code}")
         await self.channel_layer.group_discard(
             self.room_group_name,
             self.channel_name
@@ -38,53 +35,28 @@ class BroadcastConsumer(AsyncWebsocketConsumer):
     # Receive message from WebSocket
     async def receive(self, text_data):
         try:
-            text_data_json = json.loads(text_data)
-            message_type = text_data_json.get('type')
+            data = json.loads(text_data)
+            message_type = data.get('type')
             
-            print(f"Received message type: {message_type}")  # Console log
+            logger.info(f"Received WebRTC signaling: {message_type}")
             
-            if message_type == 'video_frame':
-                # Broadcast frame to room group
-                await self.channel_layer.group_send(
-                    self.room_group_name,
-                    {
-                        'type': 'broadcast_frame',
-                        'frame': text_data_json['frame'],
-                        'broadcaster_id': text_data_json.get('broadcaster_id', '')
-                    }
-                )
-            elif message_type == 'viewer_joined':
-                # Send message to room group
-                await self.channel_layer.group_send(
-                    self.room_group_name,
-                    {
-                        'type': 'viewer_update',
-                        'action': 'joined',
-                        'viewer_id': text_data_json.get('viewer_id', '')
-                    }
-                )
+            # Forward the signaling message to the room group
+            await self.channel_layer.group_send(
+                self.room_group_name,
+                {
+                    'type': 'relay_message',
+                    'message': data,
+                    'sender_channel_name': self.channel_name
+                }
+            )
         except Exception as e:
-            logger.error(f"Error in WebSocket receive: {str(e)}")
-            print(f"Error in WebSocket receive: {str(e)}")  # Console log
+            logger.error(f"Error in WebRTC signaling receive: {str(e)}")
     
-    # Receive message from room group
-    async def broadcast_frame(self, event):
-        frame = event['frame']
+    # Relay WebRTC messages to other clients
+    async def relay_message(self, event):
+        message = event['message']
+        sender_channel_name = event['sender_channel_name']
         
-        # Send message to WebSocket
-        await self.send(text_data=json.dumps({
-            'type': 'video_frame',
-            'frame': frame
-        }))
-    
-    # Handle viewer updates
-    async def viewer_update(self, event):
-        action = event['action']
-        viewer_id = event['viewer_id']
-        
-        # Send message to WebSocket
-        await self.send(text_data=json.dumps({
-            'type': 'viewer_update',
-            'action': action,
-            'viewer_id': viewer_id
-        }))
+        # Don't send the message back to the sender
+        if sender_channel_name != self.channel_name:
+            await self.send(text_data=json.dumps(message))
